@@ -7,7 +7,7 @@ st.title("Simple Sales Dashboard")
 file = st.file_uploader("Upload Excel file", type=["xlsx","csv"])
 
 if file:
-    df = pd.read_excel(file)
+    df = pd.read_csv(file)
 
     st.subheader("Data Preview")
     st.dataframe(df)
