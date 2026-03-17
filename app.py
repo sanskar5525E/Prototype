@@ -39,6 +39,25 @@ section[data-testid="stSidebar"] *{color:#C8D8E8 !important;}
 .stInfo{background:rgba(91,158,244,0.1) !important;border:1px solid rgba(91,158,244,0.3) !important;border-radius:10px !important;}
 .stWarning{background:rgba(255,140,66,0.1) !important;border:1px solid rgba(255,140,66,0.3) !important;border-radius:10px !important;}
 .stError{background:rgba(255,56,96,0.1) !important;border:1px solid rgba(255,56,96,0.3) !important;border-radius:10px !important;}
+
+/* ── Mobile Friendly ── */
+@media (max-width: 768px) {
+  /* Bigger tap targets */
+  .stButton>button{padding:14px 20px !important;font-size:15px !important;width:100% !important;}
+  .stDownloadButton>button{padding:14px 20px !important;font-size:14px !important;}
+  /* Tabs scroll on mobile */
+  .stTabs [data-baseweb="tab-list"]{overflow-x:auto !important;flex-wrap:nowrap !important;}
+  .stTabs [data-baseweb="tab"]{white-space:nowrap !important;font-size:12px !important;padding:8px 12px !important;}
+  /* Metrics stack nicely */
+  [data-testid="metric-container"]{padding:12px 14px !important;}
+  [data-testid="metric-container"] [data-testid="stMetricValue"]{font-size:17px !important;}
+  /* Dataframe scrollable */
+  [data-testid="stDataFrame"]{overflow-x:auto !important;}
+  /* Expanders full width */
+  .streamlit-expanderHeader{font-size:13px !important;}
+  /* Remove sidebar on mobile — show as hamburger */
+  section[data-testid="stSidebar"]{width:100% !important;}
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -111,23 +130,127 @@ def trend_badge(trend):
 #  DATA
 # ══════════════════════════════════════════════════════════════════════════════
 def generate_example_data():
+    """
+    Realistic FMCG India data:
+    - Invoice window: last 90 days only (not 300)
+    - Due dates: 14-21 days credit period (FMCG standard)
+    - Overdue: max 60 days (realistic, not 180)
+    - Amounts: Rs. 5,000-50,000 (typical FMCG invoice)
+    - Payment patterns reflect real distributor behaviour
+    """
     np.random.seed(42)
-    customers = ["Apex Retail Ltd","BlueStar Merchants","Cosmo Distributors",
-                 "Delta Traders","Echo Enterprises","Frontier Goods","Global Mart","Horizon Shops"]
-    data, today = [], pd.Timestamp("2026-01-01")
+    # Realistic Indian FMCG customer names
+    customers = [
+        "Raju Kirana Stores",
+        "Mehta General Traders",
+        "Shree Ram Distributors",
+        "Patel Wholesale Mart",
+        "Krishna Retail Hub",
+        "Sharma & Sons Traders",
+        "Gupta FMCG Supplies",
+        "Vijay Super Store",
+    ]
+    data   = []
+    today  = pd.Timestamp(datetime.now().date())
+
+    # Each customer gets a payment personality
+    personalities = {
+        "Raju Kirana Stores":       "good",      # Grade A — always on time
+        "Mehta General Traders":    "mostly_good",# Grade B — slight delays
+        "Shree Ram Distributors":   "average",   # Grade B — moderate delays
+        "Patel Wholesale Mart":     "late",       # Grade C — regularly late
+        "Krishna Retail Hub":       "good",       # Grade A
+        "Sharma & Sons Traders":    "very_late",  # Grade D — critical
+        "Gupta FMCG Supplies":      "average",    # Grade B/C
+        "Vijay Super Store":        "partial",    # Grade C — partial payments
+    }
+
     for cust in customers:
-        for i in range(int(np.random.randint(5,12))):
-            inv_date = today - pd.Timedelta(days=int(np.random.randint(10,300)))
-            due_date = inv_date + pd.Timedelta(days=21)
-            amount   = int(np.random.randint(2000,40000))
-            r        = float(np.random.rand())
-            if r<0.3:   paid=amount; pay_date=due_date-pd.Timedelta(days=int(np.random.randint(1,5)))
-            elif r<0.6: paid=amount; pay_date=due_date+pd.Timedelta(days=int(np.random.randint(5,40)))
-            elif r<0.8: paid=round(amount*float(np.random.uniform(0.2,0.8))); pay_date=due_date+pd.Timedelta(days=int(np.random.randint(0,60)))
-            else:       paid=0; pay_date=pd.NaT
-            data.append({"customer_name":cust,"invoice_no":"INV-{}-{}".format(cust[:3].upper(),i),
-                          "invoice_date":inv_date,"due_date":due_date,
-                          "amount":amount,"paid_amount":round(paid),"payment_date":pay_date})
+        personality = personalities[cust]
+        n_invoices  = int(np.random.randint(4, 9))
+
+        for i in range(n_invoices):
+            # Invoices within last 90 days — realistic window
+            days_ago = int(np.random.randint(5, 90))
+            inv_date = today - pd.Timedelta(days=days_ago)
+            # FMCG credit period: 14-21 days
+            credit_days = int(np.random.choice([14, 21]))
+            due_date    = inv_date + pd.Timedelta(days=credit_days)
+            # Realistic amounts: Rs. 5,000 - 50,000
+            amount = int(np.random.choice([
+                5000, 8000, 10000, 12000, 15000,
+                18000, 20000, 25000, 30000, 40000, 50000
+            ]))
+
+            # Payment behaviour by personality
+            if personality == "good":
+                # Pays on time or 1-3 days early
+                paid = amount
+                pay_date = due_date - pd.Timedelta(days=int(np.random.randint(0,4)))
+
+            elif personality == "mostly_good":
+                r = float(np.random.rand())
+                if r < 0.7:
+                    paid = amount
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(0,8)))
+                else:
+                    paid = amount
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(8,18)))
+
+            elif personality == "average":
+                r = float(np.random.rand())
+                if r < 0.5:
+                    paid = amount
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(5,20)))
+                elif r < 0.8:
+                    paid = round(amount * float(np.random.uniform(0.5, 0.9)))
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(0,15)))
+                else:
+                    paid = 0; pay_date = pd.NaT
+
+            elif personality == "late":
+                r = float(np.random.rand())
+                if r < 0.4:
+                    paid = amount
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(20,45)))
+                elif r < 0.7:
+                    paid = round(amount * float(np.random.uniform(0.3, 0.6)))
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(10,30)))
+                else:
+                    paid = 0; pay_date = pd.NaT
+
+            elif personality == "very_late":
+                # Grade D — mostly unpaid or very late
+                r = float(np.random.rand())
+                if r < 0.3:
+                    paid = round(amount * float(np.random.uniform(0.1, 0.3)))
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(30,60)))
+                else:
+                    paid = 0; pay_date = pd.NaT
+
+            elif personality == "partial":
+                # Pays partial amounts, rarely full
+                r = float(np.random.rand())
+                if r < 0.2:
+                    paid = amount
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(15,35)))
+                else:
+                    paid = round(amount * float(np.random.uniform(0.2, 0.7)))
+                    pay_date = due_date + pd.Timedelta(days=int(np.random.randint(5,25))) if float(np.random.rand()) > 0.3 else pd.NaT
+
+            else:
+                paid = 0; pay_date = pd.NaT
+
+            data.append({
+                "customer_name": cust,
+                "invoice_no":    "INV-{}-{:03d}".format(cust[:3].upper(), i+1),
+                "invoice_date":  inv_date,
+                "due_date":      due_date,
+                "amount":        amount,
+                "paid_amount":   round(float(paid)),
+                "payment_date":  pay_date,
+            })
+
     return pd.DataFrame(data)
 
 def clean_data(df):
@@ -153,7 +276,7 @@ def calc_metrics(df, today):
     mask_late = df["fully_paid"]&df["payment_date"].notna()&(df["payment_date"]>df["due_date"])
     df.loc[mask_late,"overdue_days"] = (df.loc[mask_late,"payment_date"]-df.loc[mask_late,"due_date"]).dt.days.astype(int)
     df.loc[mask_late,"paid_late"] = True
-    df["overdue_days"] = df["overdue_days"].clip(lower=0,upper=180)
+    df["overdue_days"] = df["overdue_days"].clip(lower=0,upper=60)
     return df
 
 def predict_behaviour(inv_df):
