@@ -350,24 +350,19 @@ def aggregate(df):
     return pd.DataFrame(rows).sort_values("Risk Score",ascending=False).reset_index(drop=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  AUTO LOAD EXAMPLE DATA
+#  AUTO LOAD EXAMPLE DATA — always fresh, no cache
 # ══════════════════════════════════════════════════════════════════════════════
 today = pd.Timestamp(datetime.now().date())
 
-if "demo_loaded" not in st.session_state:
-    raw  = generate_example_data()
-    clean = clean_data(raw)
-    inv   = calc_metrics(clean, today)
-    summ  = aggregate(inv)
-    age   = calc_ageing(inv)
-    st.session_state["df_inv"]     = inv
-    st.session_state["summary"]    = summ
-    st.session_state["ageing"]     = age
-    st.session_state["demo_loaded"] = True
+raw   = generate_example_data()
+clean = clean_data(raw)
+inv   = calc_metrics(clean, today)
+summ  = aggregate(inv)
+age   = calc_ageing(inv)
 
-summary = st.session_state["summary"]
-df_inv  = st.session_state["df_inv"]
-ageing  = st.session_state["ageing"]
+summary = summ
+df_inv  = inv
+ageing  = age
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DEMO BANNER
