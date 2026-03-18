@@ -71,10 +71,10 @@ GRADE_META = {
     "D":{"color":"#FF3860","rgba":"255,56,96",   "label":"Critical Risk", "action":"Suspend Credit",   "call":"Urgent Collection Call", "limit_mult":0.0},
 }
 CALL_SCRIPTS = {
-    "A":"Hello {name}, we are calling to thank you for your outstanding payment record. As a valued customer, we are pleased to offer you an increased credit facility.",
-    "B":"Hello {name}, this is a friendly check-in call. We noticed a few minor payment delays and want to ensure everything is running smoothly on your end.",
-    "C":"Hello {name}, we are following up on overdue invoices totalling {amount}. We need to discuss an immediate payment arrangement to keep your account active.",
-    "D":"Hello {name}, this is an urgent notice. Outstanding dues of {amount} have been flagged for suspension. Immediate payment is required to avoid legal escalation.",
+    "A":"Bhai {name}, aapka payment record bahut accha hai. Aapke liye hum credit limit badha rahe hain. Thank you for always paying on time!",
+    "B":"Hello {name} bhai, bas ek friendly call tha. Kuch invoices thoda late ho rahe hain — koi problem hai toh batao, hum mil ke sort kar lete hain.",
+    "C":"Hello {name} bhai, aapke {amount} ke invoices overdue hain. Kab tak payment ho sakti hai? Batao toh hum account active rakh sakte hain.",
+    "D":"Hello {name} bhai, urgent baat karni thi. {amount} bahut time se pending hai. Aaj payment nahi hua toh hume supply band karni padegi. Please abhi baat karo.",
 }
 OVERDUE_CAP = 45
 WA_NUMBER   = "919439493613"
@@ -83,8 +83,31 @@ WA_NUMBER   = "919439493613"
 #  HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 def fmt(x):
-    try:    return "Rs.{:,.0f}".format(float(x))
-    except: return "Rs.0"
+    """Short Indian format for KPIs — lakhs and crores."""
+    try:
+        v = float(x)
+        if v >= 10_000_000: return "₹{:.2f} Cr".format(v / 10_000_000)
+        elif v >= 100_000:  return "₹{:.2f} L".format(v / 100_000)
+        elif v >= 1_000:    return "₹{:.1f}K".format(v / 1_000)
+        else:               return "₹{:.0f}".format(v)
+    except: return "₹0"
+
+def fmt_full(x):
+    """Full Indian number format — 2,77,500 style."""
+    try:
+        v = int(float(x))
+        s = str(v)
+        if len(s) <= 3: return "₹" + s
+        last3 = s[-3:]
+        rest  = s[:-3]
+        parts = []
+        while len(rest) > 2:
+            parts.append(rest[-2:])
+            rest = rest[:-2]
+        if rest: parts.append(rest)
+        parts.reverse()
+        return "₹" + ",".join(parts) + "," + last3
+    except: return "₹0"
 
 def card_html(gk, cnt):
     m = GRADE_META[gk]
@@ -281,18 +304,32 @@ def calc_metrics(df, today):
 
 def predict_behaviour(inv_df):
     paid = inv_df[inv_df["fully_paid"]==True].copy().sort_values("invoice_date")
-    if len(paid)<3:
-        return "New",0,"Not enough history to predict payment behaviour."
-    mid     = len(paid)//2
-    delta   = paid.iloc[mid:]["overdue_days"].mean() - paid.iloc[:mid]["overdue_days"].mean()
+    total_inv  = len(inv_df)
+    paid_count = len(paid)
+
+    if paid_count < 3:
+        if total_inv == 0:
+            return "New", 0, "No invoice history yet."
+        unpaid_pct = round(((total_inv - paid_count) / total_inv) * 100)
+        return "New", 0, "Only {} paid invoice(s). Need 3+ to predict. {}% invoices unpaid.".format(paid_count, unpaid_pct)
+
+    mid             = len(paid) // 2
+    first_half_avg  = paid.iloc[:mid]["overdue_days"].mean()
+    second_half_avg = paid.iloc[mid:]["overdue_days"].mean()
+    delta   = second_half_avg - first_half_avg
     last3   = paid.tail(3)["overdue_days"].mean()
     overall = paid["overdue_days"].mean()
-    if delta>5 or last3>overall*1.3:
-        return "Worsening",round(last3,1),"Likely to delay next payment by {:.0f}+ days.".format(max(last3,paid.iloc[mid:]["overdue_days"].mean()))
-    elif delta<-5 or last3<overall*0.7:
-        return "Improving",round(last3,1),"Payment behaviour improving. Average delay reduced to {:.0f} days.".format(last3)
+    pay_rate = paid_count / total_inv if total_inv > 0 else 0
+
+    if (delta > 5 and last3 > overall) or last3 > overall * 1.3:
+        msg = "Payment delays increasing. Last 3 invoices averaged {:.0f} days late vs {:.0f} days overall.".format(last3, overall)
+        if pay_rate < 0.6:
+            msg += " Only {:.0f}% invoices fully paid — high default risk.".format(pay_rate * 100)
+        return "Worsening", round(last3, 1), msg
+    elif (delta < -5 and last3 < overall) or last3 < overall * 0.7:
+        return "Improving", round(last3, 1), "Payment behaviour improving. Last 3 invoices averaged {:.0f} days late vs {:.0f} days overall.".format(last3, overall)
     else:
-        return "Stable",round(last3,1),"Consistent payment pattern. Average delay is {:.0f} days.".format(overall)
+        return "Stable", round(last3, 1), "Consistent payment pattern. Average delay {:.0f} days. Pay rate {:.0f}%.".format(overall, pay_rate * 100)
 
 def calc_ageing(df):
     df = df[df["outstanding"]>0].copy()
@@ -449,15 +486,27 @@ with st.sidebar:
     """.format(wa_url_side), unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  KPIs
+#  KPI CARDS — custom HTML, never truncate
 # ══════════════════════════════════════════════════════════════════════════════
+def kpi_card(label, value, color="#F0F4F8", sub=None):
+    sub_html = '<div style="font-size:11px;color:#FF3860;margin-top:4px;">'+sub+'</div>' if sub else ''
+    return (
+        '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+        'border-radius:14px;padding:16px 18px;">'
+        '<div style="font-size:11px;color:#8899AA;letter-spacing:0.08em;'
+        'text-transform:uppercase;margin-bottom:8px;">'+label+'</div>'
+        '<div style="font-family:\'DM Mono\',monospace;font-size:clamp(13px,1.6vw,20px);'
+        'font-weight:700;color:'+color+';word-break:break-word;line-height:1.3;">'+value+'</div>'
+        +sub_html+
+        '</div>'
+    )
+
 k1,k2,k3,k4,k5 = st.columns(5)
-k1.metric("Customers",    str(len(summary)))
-k2.metric("Total Credit", fmt(summary["Total Credit"].sum()))
-k3.metric("Total Paid",   fmt(summary["Total Paid"].sum()))
-k4.metric("Outstanding",  fmt(summary["Outstanding"].sum()))
-k5.metric("Critical (D)", str(int((summary["Risk Grade"]=="D").sum())),
-          delta="Immediate action needed", delta_color="inverse")
+k1.markdown(kpi_card("Customers",    str(len(summary))), unsafe_allow_html=True)
+k2.markdown(kpi_card("Total Credit", fmt_full(summary["Total Credit"].sum()), "#5B9EF4"), unsafe_allow_html=True)
+k3.markdown(kpi_card("Total Paid",   fmt_full(summary["Total Paid"].sum()),   "#00E5A0"), unsafe_allow_html=True)
+k4.markdown(kpi_card("Outstanding",  fmt_full(summary["Outstanding"].sum()),  "#FFD166"), unsafe_allow_html=True)
+k5.markdown(kpi_card("Critical (D)", str(int((summary["Risk Grade"]=="D").sum())), "#FF3860", "⚠ Immediate action needed"), unsafe_allow_html=True)
 st.markdown("<div style='height:16px'/>",unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -481,24 +530,46 @@ with ch1:
 
 with ch2:
     st.markdown("**Outstanding Amount by Customer**")
-    bar_df = summary[["Customer","Outstanding","Risk Grade"]].copy().sort_values("Outstanding",ascending=True)
-    fig    = go.Figure()
-    for gk in ["A","B","C","D"]:
-        sub = bar_df[bar_df["Risk Grade"]==gk]
-        if len(sub)==0: continue
-        fig.add_trace(go.Bar(x=sub["Outstanding"],y=sub["Customer"],orientation="h",
-            name="Grade "+gk, marker_color=GRADE_META[gk]["color"],
-            text=sub["Outstanding"].apply(lambda v:"Rs.{:,.0f}".format(v)),
-            textposition="outside",textfont=dict(size=10,color="#C8D8E8")))
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#C8D8E8",barmode="overlay",
-        legend=dict(font=dict(color="#C8D8E8"),orientation="h",y=-0.08),
-        margin=dict(t=10,b=50,l=10,r=110),
-        height=max(300,len(bar_df)*28+60),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.05)",tickformat=",.0f",title=""),
-        yaxis=dict(gridcolor="rgba(0,0,0,0)",title="",automargin=True,tickfont=dict(size=11)))
-    st.plotly_chart(fig,use_container_width=True)
+    # Only show customers with outstanding > 0
+    bar_df = summary[summary["Outstanding"] > 0][["Customer","Outstanding","Risk Grade"]]\
+             .copy().sort_values("Outstanding", ascending=True)
+
+    if len(bar_df) == 0:
+        st.markdown(
+            '<div style="background:rgba(0,229,160,0.06);border:1px solid rgba(0,229,160,0.2);'
+            'border-radius:12px;padding:32px;text-align:center;">'
+            '<div style="font-size:28px;margin-bottom:8px">🎉</div>'
+            '<div style="color:#00E5A0;font-weight:700;font-size:15px">All customers are fully paid!</div>'
+            '<div style="color:#8899AA;font-size:12px;margin-top:4px">No outstanding amounts.</div>'
+            '</div>', unsafe_allow_html=True)
+    else:
+        bar_colors = [GRADE_META[g]["color"] for g in bar_df["Risk Grade"]]
+        bar_labels = [fmt_full(v) for v in bar_df["Outstanding"]]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=bar_df["Outstanding"],
+            y=bar_df["Customer"],
+            orientation="h",
+            marker=dict(color=bar_colors, line=dict(width=0), opacity=0.9),
+            text=bar_labels,
+            textposition="outside",
+            textfont=dict(size=11, color="#C8D8E8", family="DM Mono"),
+            hovertemplate="<b>%{y}</b><br>Outstanding: %{text}<br>Grade: %{customdata}<extra></extra>",
+            customdata=bar_df["Risk Grade"],
+        ))
+        chart_height = max(280, len(bar_df) * 42 + 60)
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#C8D8E8",
+            margin=dict(t=10, b=20, l=10, r=140),
+            height=chart_height, bargap=0.35,
+            xaxis=dict(gridcolor="rgba(255,255,255,0.04)", tickformat=",.0f",
+                       title="", tickfont=dict(size=10), showline=False, zeroline=False),
+            yaxis=dict(gridcolor="rgba(0,0,0,0)", title="",
+                       automargin=True, tickfont=dict(size=12, family="Inter")),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 st.markdown("---")
 rc = st.columns(4)
@@ -523,7 +594,7 @@ with tab_risk:
                       "Total Credit","Total Paid","Outstanding","Max Overdue(d)",
                       "Avg Delay(d)","Suggested Limit","Credit Action","Behaviour Trend"]].copy()
     for c in ["Total Credit","Total Paid","Outstanding","Suggested Limit"]:
-        disp[c] = disp[c].apply(fmt)
+        disp[c] = disp[c].apply(fmt_full)
     st.dataframe(disp,use_container_width=True,hide_index=True,
         column_config={
             "Risk Score":      st.column_config.ProgressColumn("Score",min_value=0,max_value=100,format="%d"),
@@ -569,7 +640,7 @@ with tab_beh:
 with tab_call:
     cd = filtered[["Customer","Risk Grade","Outstanding","Max Overdue(d)","Call Type","Credit Action","Call Script"]].copy()
     cd.insert(0,"Priority",range(1,len(cd)+1))
-    cd["Outstanding"]    = cd["Outstanding"].apply(fmt)
+    cd["Outstanding"]    = cd["Outstanding"].apply(fmt_full)
     cd["Max Overdue(d)"] = cd["Max Overdue(d)"].apply(lambda x:"{} days".format(int(x)) if x>0 else "On time")
     st.dataframe(cd,use_container_width=True,hide_index=True,
         column_config={
@@ -590,7 +661,7 @@ with tab_age:
     st.caption("FMCG India buckets: Current / 1-15 / 16-30 / 31-45 / 45+ days")
     ad = ageing.copy()
     for c in ["Current","1-15 days","16-30 days","31-45 days","45+ days","Total Outstanding"]:
-        if c in ad.columns: ad[c]=ad[c].apply(fmt)
+        if c in ad.columns: ad[c]=ad[c].apply(fmt_full)
     ad.rename(columns={"customer_name":"Customer"},inplace=True)
     st.dataframe(ad,use_container_width=True,hide_index=True)
     buckets = ["Current","1-15 days","16-30 days","31-45 days","45+ days"]
@@ -636,7 +707,7 @@ with tab_inv:
         unsafe_allow_html=True)
     id_ = cust_inv[["invoice_no","invoice_date","due_date","amount","paid_amount","outstanding","overdue_days","paid_late","fully_paid"]].copy()
     id_.columns = ["Invoice","Invoice Date","Due Date","Amount","Paid","Outstanding","Overdue(d)","Paid Late","Fully Paid"]
-    for c in ["Amount","Paid","Outstanding"]: id_[c]=id_[c].apply(fmt)
+    for c in ["Amount","Paid","Outstanding"]: id_[c]=id_[c].apply(fmt_full)
     st.dataframe(id_,use_container_width=True,hide_index=True,
         column_config={
             "Overdue(d)": st.column_config.NumberColumn("Overdue",format="%d days"),
